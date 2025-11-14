@@ -217,8 +217,10 @@ def getDataset(args):
             transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
-        dataset_train = datasets.CIFAR10('/home/hong/NeFL/.data/cifar', train=True, download=True, transform=transform_train)
-        dataset_test = datasets.CIFAR10('/home/hong/NeFL/.data/cifar', train=False, download=True, transform=transform_test)
+        # dataset_train = datasets.CIFAR10('/home/hong/NeFL/.data/cifar', train=True, download=True, transform=transform_train)
+        # dataset_test = datasets.CIFAR10('/home/hong/NeFL/.data/cifar', train=False, download=True, transform=transform_test)
+        dataset_train = datasets.CIFAR10('./data/cifar', train=True, download=True, transform=transform_train)
+        dataset_test = datasets.CIFAR10('./data/cifar', train=False, download=True, transform=transform_test)
     elif args.dataset =='cifar100':
         ## CIFAR
         args.num_classes = 100
@@ -233,12 +235,15 @@ def getDataset(args):
             transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
-        dataset_train = datasets.CIFAR100('/home/hong/NeFL/.data/cifar', train=True, download=True, transform=transform_train)
-        dataset_test = datasets.CIFAR100('/home/hong/NeFL/.data/cifar', train=False, download=True, transform=transform_test)
+        # dataset_train = datasets.CIFAR100('/home/hong/NeFL/.data/cifar', train=True, download=True, transform=transform_train)
+        # dataset_test = datasets.CIFAR100('/home/hong/NeFL/.data/cifar', train=False, download=True, transform=transform_test)
+        dataset_train = datasets.CIFAR100('./data/cifar', train=True, download=True, transform=transform_train)
+        dataset_test = datasets.CIFAR100('./data/cifar', train=False, download=True, transform=transform_test)
     elif args.dataset == 'cinic':
         cinic_mean = [0.47889522, 0.47227842, 0.43047404]
         cinic_std = [0.24205776, 0.23828046, 0.25874835]
-        ddir = '/home/hong/tbu/NeFL/.data/cinic'
+        # ddir = '/home/hong/tbu/NeFL/.data/cinic'
+        ddir = './data/cinic'
         traindir = os.path.join(ddir, 'train')
         testdir = os.path.join(ddir, 'test')
         train_transform = transforms.Compose([
@@ -268,8 +273,10 @@ def getDataset(args):
                 transforms.ToTensor(),
                 transforms.Normalize((0.4376821, 0.4437697, 0.47280442), (0.19803012, 0.20101562, 0.19703614))
             ])
-        dataset_train = datasets.SVHN('/home/hong/NeFL/.data/svhn', split='train', download=True, transform=transform_train)
-        dataset_test = datasets.SVHN('/home/hong/NeFL/.data/svhn', split='test', download=True, transform=transform_test)
+        # dataset_train = datasets.SVHN('/home/hong/NeFL/.data/svhn', split='train', download=True, transform=transform_train)
+        # dataset_test = datasets.SVHN('/home/hong/NeFL/.data/svhn', split='test', download=True, transform=transform_test)
+        dataset_train = datasets.SVHN('./data/svhn', split='train', download=True, transform=transform_train)
+        dataset_test = datasets.SVHN('./data/svhn', split='test', download=True, transform=transform_test)
         args.epochs = 100
 
     elif args.dataset == 'stl10':
@@ -286,8 +293,10 @@ def getDataset(args):
                         transforms.Normalize([0.4914, 0.4822, 0.4465],
                                             [0.2471, 0.2435, 0.2616])
                 ])
-        dataset_train = datasets.STL10('/home/hong/NeFL/.data/stl10', split='train', download=True, transform=transform_train)
-        dataset_test = datasets.STL10('/home/hong/NeFL/.data/stl10', split='test', download=True, transform=transform_test)
+        # dataset_train = datasets.STL10('/home/hong/NeFL/.data/stl10', split='train', download=True, transform=transform_train)
+        # dataset_test = datasets.STL10('/home/hong/NeFL/.data/stl10', split='test', download=True, transform=transform_test)
+        dataset_train = datasets.STL10('./data/stl10', split='train', download=True, transform=transform_train)
+        dataset_test = datasets.STL10('./data/stl10', split='test', download=True, transform=transform_test)
 
     ### downsampled ImageNet
     # imagenet_data = datasets.ImageNet('/home')
