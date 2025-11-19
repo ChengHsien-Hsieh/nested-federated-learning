@@ -2,6 +2,7 @@ import numpy as np
 from torchvision import datasets, transforms
 from math import sqrt
 import random
+import torch
 # import lasagne
 import pickle
 import os
@@ -217,10 +218,24 @@ def getDataset(args):
             transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
-        # dataset_train = datasets.CIFAR10('/home/hong/NeFL/.data/cifar', train=True, download=True, transform=transform_train)
-        # dataset_test = datasets.CIFAR10('/home/hong/NeFL/.data/cifar', train=False, download=True, transform=transform_test)
-        dataset_train = datasets.CIFAR10('./data/cifar', train=True, download=True, transform=transform_train)
+        
+        # Load full train and test sets
+        dataset_train_full = datasets.CIFAR10('./data/cifar', train=True, download=True, transform=transform_train)
         dataset_test = datasets.CIFAR10('./data/cifar', train=False, download=True, transform=transform_test)
+        
+        # Split train into train + val (same as FedFold: 80% train, 20% val)
+        val_ratio = getattr(args, 'val_ratio', 0.2)  # Default 0.2 like FedFold
+        val_size = int(len(dataset_train_full) * val_ratio)
+        train_size = len(dataset_train_full) - val_size
+        
+        dataset_train, dataset_val = torch.utils.data.random_split(
+            dataset_train_full, [train_size, val_size],
+            generator=torch.Generator().manual_seed(args.rs)  # For reproducibility
+        )
+        
+        print(f"Dataset split: Train={train_size}, Val={val_size}, Test={len(dataset_test)}")
+        
+        return dataset_train, dataset_test, dataset_val
     elif args.dataset =='cifar100':
         ## CIFAR
         args.num_classes = 100
@@ -235,10 +250,24 @@ def getDataset(args):
             transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
-        # dataset_train = datasets.CIFAR100('/home/hong/NeFL/.data/cifar', train=True, download=True, transform=transform_train)
-        # dataset_test = datasets.CIFAR100('/home/hong/NeFL/.data/cifar', train=False, download=True, transform=transform_test)
-        dataset_train = datasets.CIFAR100('./data/cifar', train=True, download=True, transform=transform_train)
+        
+        # Load full train and test sets
+        dataset_train_full = datasets.CIFAR100('./data/cifar', train=True, download=True, transform=transform_train)
         dataset_test = datasets.CIFAR100('./data/cifar', train=False, download=True, transform=transform_test)
+        
+        # Split train into train + val
+        val_ratio = getattr(args, 'val_ratio', 0.2)
+        val_size = int(len(dataset_train_full) * val_ratio)
+        train_size = len(dataset_train_full) - val_size
+        
+        dataset_train, dataset_val = torch.utils.data.random_split(
+            dataset_train_full, [train_size, val_size],
+            generator=torch.Generator().manual_seed(args.rs)
+        )
+        
+        print(f"Dataset split: Train={train_size}, Val={val_size}, Test={len(dataset_test)}")
+        
+        return dataset_train, dataset_test, dataset_val
     elif args.dataset == 'cinic':
         cinic_mean = [0.47889522, 0.47227842, 0.43047404]
         cinic_std = [0.24205776, 0.23828046, 0.25874835]
@@ -258,6 +287,8 @@ def getDataset(args):
         ])
         dataset_train = datasets.ImageFolder(root=traindir, transform=train_transform)
         dataset_test = datasets.ImageFolder(root=testdir, transform=test_transform)
+        # Note: cinic doesn't have val split in this implementation
+        return dataset_train, dataset_test, None
                 
     elif args.dataset == 'svhn':
         ### SVHN
@@ -278,6 +309,7 @@ def getDataset(args):
         dataset_train = datasets.SVHN('./data/svhn', split='train', download=True, transform=transform_train)
         dataset_test = datasets.SVHN('./data/svhn', split='test', download=True, transform=transform_test)
         args.epochs = 100
+        return dataset_train, dataset_test, None
 
     elif args.dataset == 'stl10':
         ### STL10
@@ -297,6 +329,7 @@ def getDataset(args):
         # dataset_test = datasets.STL10('/home/hong/NeFL/.data/stl10', split='test', download=True, transform=transform_test)
         dataset_train = datasets.STL10('./data/stl10', split='train', download=True, transform=transform_train)
         dataset_test = datasets.STL10('./data/stl10', split='test', download=True, transform=transform_test)
+        return dataset_train, dataset_test, None
 
     ### downsampled ImageNet
     # imagenet_data = datasets.ImageNet('/home')
@@ -338,7 +371,103 @@ def getDataset(args):
     #                                                            [0.229, 0.224, 0.225])])
     # dataset_train = datasets.Food101('/home/hong/NeFL/.data/food101', split='train', download=True, transform=tranform_train)
     # dataset_test = datasets.Food101('/home/hong/NeFL/.data/food101', split='test', download=True, transform=tranform_test)
-    return dataset_train, dataset_test
+    
+    # Default fallback: return None for validation set if dataset not explicitly handled
+    return dataset_train, dataset_test, None
+
+def get_submodel_info_from_train_ratio(args, train_ratio):
+    """
+    Generate NeFL submodels based on train_ratio (FedFold-style)
+    Example: train_ratio='16-1' creates 2 models with width ratio 1:16
+    
+    Args:
+        args: Arguments containing model_name and method
+        train_ratio: String like '16-1', '8-1', etc.
+    
+    Returns:
+        ps: Width multipliers for each model [sqrt(1/16), sqrt(16/16)] for '16-1'
+        s2D: Depth configuration for each model
+    """
+    from math import sqrt, ceil
+    
+    ratio_parts = train_ratio.split('-')
+    if len(ratio_parts) != 2:
+        raise ValueError(f"train_ratio must be in format 'max-min' (e.g., '16-1'), got: {train_ratio}")
+    
+    max_width = int(ratio_parts[0])
+    min_width = int(ratio_parts[1])
+    
+    print(f"\n=== Creating submodels with train_ratio={train_ratio} ===")
+    print(f"Max width: {max_width}x, Min width: {min_width}x")
+    
+    # For simplicity, create exactly 2 models: [min_width, max_width]
+    # This gives us the most extreme heterogeneity (like FedFold's Strong/Weak)
+    model_widths = [min_width, max_width]
+    
+    ps = []
+    s2D = []
+    
+    if args.method == 'W':  # Width-only
+        print("Method: Width-only (W)")
+        for width in model_widths:
+            # Width multiplier: sqrt(width / max_width)
+            width_multiplier = sqrt(width / max_width)
+            ps.append(width_multiplier)
+            print(f"  Model {len(ps)-1}: width={width}x, multiplier={width_multiplier:.4f}")
+            
+            # Full depth for all models
+            if args.model_name == 'resnet56':
+                s2D.append([[[1, 1, 1, 1, 1, 1, 1, 1, 1] for _ in range(3)]])
+            elif args.model_name == 'resnet110':
+                s2D.append([[[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] for _ in range(3)]])
+            elif args.model_name == 'resnet18':
+                s2D.append([[[1, 1, 1, 1] for _ in range(3)]])
+            elif args.model_name == 'resnet34':
+                s2D.append([[[1, 1, 1, 1, 1, 1] for _ in range(3)]])
+            elif args.model_name == 'resnet101':
+                s2D.append([[[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] for _ in range(3)]])
+            else:
+                raise ValueError(f"Unsupported model: {args.model_name}")
+    
+    elif args.method == 'WD':  # Width + Depth
+        print("Method: Width + Depth (WD)")
+        # Get total number of blocks for the model
+        if args.model_name == 'resnet56':
+            total_blocks = 9
+        elif args.model_name == 'resnet110':
+            total_blocks = 18
+        elif args.model_name == 'resnet18':
+            total_blocks = 4
+        elif args.model_name == 'resnet34':
+            total_blocks = 6
+        elif args.model_name == 'resnet101':
+            total_blocks = 17
+        else:
+            raise ValueError(f"Unsupported model: {args.model_name}")
+        
+        for i, width in enumerate(model_widths):
+            # Width multiplier
+            width_multiplier = sqrt(width / max_width)
+            ps.append(width_multiplier)
+            
+            # Depth scaling: smaller model uses fewer blocks
+            # For 2 models: [min uses ~50% blocks, max uses 100% blocks]
+            depth_ratio = (i + 1) / len(model_widths)
+            num_blocks = max(2, int(total_blocks * depth_ratio))
+            
+            depth_mask = [1] * num_blocks + [0] * (total_blocks - num_blocks)
+            s2D.append([[depth_mask for _ in range(3)]])
+            
+            print(f"  Model {i}: width={width}x (mult={width_multiplier:.4f}), depth={num_blocks}/{total_blocks} blocks")
+    
+    else:
+        raise ValueError(f"Unsupported method: {args.method}. Use 'W' or 'WD'")
+    
+    print(f"=== Created {len(ps)} submodels ===")
+    print(f"Width multipliers (ps): {[f'{p:.4f}' for p in ps]}")
+    print()
+    
+    return ps, s2D
 
 def get_submodel_info(args):
     if args.model_name == 'resnet56':

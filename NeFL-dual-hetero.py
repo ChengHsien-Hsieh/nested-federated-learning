@@ -26,44 +26,47 @@ from utils.NeFedAvg import NeFedAvg
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--num_users', type=int, default=100)
-parser.add_argument('--noniid', type=str, default='iid') # iid, noniid, noniiddir
-parser.add_argument('--class_per_each_client', type=int, default=2)
+parser.add_argument('--noniid', type=str, default='noniid') # iid, noniid, noniiddir
+parser.add_argument('--class_per_each_client', type=int, default=10)
 
 parser.add_argument('--frac', type=float, default=0.1)
 parser.add_argument('--bs', type=int, default=32)
 parser.add_argument('--local_bs', type=int, default=32)
 parser.add_argument('--momentum', type=float, default=0)
-parser.add_argument('--epochs', type=int, default=300)
+parser.add_argument('--epochs', type=int, default=500)
 parser.add_argument('--local_ep', type=int, default=5)
 parser.add_argument('--num_classes', type=int, default=10)
-parser.add_argument('--lr', type=float, default=1e-2)
+parser.add_argument('--lr', type=float, default=1e-1)
 parser.add_argument('--weight_decay', type=float, default=0)
 parser.add_argument('--mode', type=str, default='normal') # normal worst
-parser.add_argument('--rs', type=int, default=2)
+parser.add_argument('--rs', type=int, default=0)
 
 parser.add_argument('--model_num', type=int, default=5)
 
 # ============ NEW: Dual Resource Heterogeneity Parameters ============
 parser.add_argument('--device_ratio', type=str, default='S2-W8', 
                     help='Device ratio: S2-W8 means 2 strong : 8 weak')
-parser.add_argument('--strong_models', type=str, default='2,3,4',
-                    help='Model indices that strong devices can train (comma-separated)')
-parser.add_argument('--weak_models', type=str, default='0,1,2',
-                    help='Model indices that weak devices can train (comma-separated)')
+parser.add_argument('--strong_models', type=str, default='1',
+                    help='Model indices that strong devices can train (comma-separated). Default "1" for 2-model setup (large model). Use "2,3,4" for 5-model setup.')
+parser.add_argument('--weak_models', type=str, default='0',
+                    help='Model indices that weak devices can train (comma-separated). Default "0" for 2-model setup (small model). Use "0,1,2" for 5-model setup.')
 parser.add_argument('--only_strong', action='store_true',
                     help='Train only strong devices')
 parser.add_argument('--only_weak', action='store_true',
                     help='Train only weak devices')
 parser.add_argument('--use_dual_hetero', action='store_true',
                     help='Enable dual resource heterogeneity mode')
+parser.add_argument('--train_ratio', type=str, default='',
+                    help='Training width ratio (e.g., "16-1" for 1:16 ratio with 2 models). Empty string uses default 5 models.')
 # ====================================================================
 
-parser.add_argument('--num_experiment', type=int, default=1, help="the number of experiments")
+parser.add_argument('--num_experiment', type=int, default=3, help="the number of experiments")
 parser.add_argument('--model_name', type=str, default='resnet18')
 parser.add_argument('--device_id', type=str, default='0')
 parser.add_argument('--learnable_step', type=bool, default=True)
 parser.add_argument('--pretrained', type=bool, default=False)
 parser.add_argument('--wandb', type=bool, default=True)
+parser.add_argument('--val_ratio', type=float, default=0.2, help='Validation set ratio (like FedFold)')
 
 parser.add_argument('--dataset', type=str, default='cifar10')
 parser.add_argument('--method', type=str, default='WD') # DD, W, WD
@@ -75,7 +78,13 @@ args.device = 'cuda:' + args.device_id
 args.strong_model_indices = [int(x) for x in args.strong_models.split(',')]
 args.weak_model_indices = [int(x) for x in args.weak_models.split(',')]
 
-dataset_train, dataset_test = getDataset(args)
+# Get dataset with train/val/test split (FedFold-style)
+dataset_train, dataset_test, dataset_val = getDataset(args)
+
+# If no validation set, use test set for validation (backward compatibility)
+if dataset_val is None:
+    print("Warning: No validation set, using test set for validation")
+    dataset_val = dataset_test
 
 if args.noniid == 'noniid':
     dict_users = cifar_noniid(args, dataset_train)
@@ -130,20 +139,21 @@ def get_model_indices_for_device(device_type, args):
 
 
 def main():
-    args.ps, args.s2D = get_submodel_info(args)
+    # Use train_ratio if specified, otherwise use default submodel info
+    if args.train_ratio:
+        print(f"Using train_ratio: {args.train_ratio}")
+        args.ps, args.s2D = get_submodel_info_from_train_ratio(args, args.train_ratio)
+    else:
+        print("Using default submodel configuration (5 models)")
+        args.ps, args.s2D = get_submodel_info(args)
+    
     args.num_models = len(args.s2D)
+    print(f"Total number of models: {args.num_models}")
 
     # Initialize local models
     local_models = []
-    if args.model_name == 'resnet18':
-        for i in range(args.num_models):
-            local_models.append(resnet18wd(args.s2D[i][0], args.ps[i], args.learnable_step, args.num_classes))
-    elif args.model_name == 'resnet34':
-        for i in range(args.num_models):
-            local_models.append(resnet34wd(args.s2D[i][0], args.ps[i], args.learnable_step, args.num_classes))
-    elif args.model_name == 'resnet56':
-        for i in range(args.num_models):
-            local_models.append(resnet56wd(args.s2D[i][0], args.ps[i], args.learnable_step, args.num_classes))
+    for i in range(args.num_models):
+        local_models.append(resnet18wd(args.s2D[i][0], args.ps[i], args.learnable_step, args.num_classes))
 
     BN_layers = []
     Steps = []
@@ -163,30 +173,16 @@ def main():
         Steps.append(copy.deepcopy(Step))
 
     # Initialize global model
-    if args.model_name == 'resnet18':
-        net_glob = resnet18wd(args.s2D[-1][0], 1, True, num_classes=args.num_classes)
-        if args.pretrained:
-            w_glob = net_glob.state_dict()
-            net_glob_temp = Presnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
-            net_glob_temp.fc = nn.Linear(512 * 1, 10)
-            net_glob_temp.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-            w_glob_temp = net_glob_temp.state_dict()
-            for key in w_glob_temp.keys():
-                w_glob[key] = w_glob_temp[key]
-            net_glob.load_state_dict(w_glob)
-    elif args.model_name == 'resnet34':
-        net_glob = resnet34wd(args.s2D[-1][0], 1, True, num_classes=args.num_classes)
-        if args.pretrained:
-            w_glob = net_glob.state_dict()
-            net_glob_temp = Presnet34(weights=ResNet34_Weights.IMAGENET1K_V1)
-            net_glob_temp.fc = nn.Linear(512 * 1, 10)
-            net_glob_temp.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-            w_glob_temp = net_glob_temp.state_dict()
-            for key in w_glob_temp.keys():
-                w_glob[key] = w_glob_temp[key]
-            net_glob.load_state_dict(w_glob)
-    elif args.model_name == 'resnet56':
-        net_glob = resnet56wd(args.s2D[-1][0], 1, True, num_classes=args.num_classes)
+    net_glob = resnet18wd(args.s2D[-1][0], 1, True, num_classes=args.num_classes)
+    if args.pretrained:
+        w_glob = net_glob.state_dict()
+        net_glob_temp = Presnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+        net_glob_temp.fc = nn.Linear(512 * 1, 10)
+        net_glob_temp.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        w_glob_temp = net_glob_temp.state_dict()
+        for key in w_glob_temp.keys():
+            w_glob[key] = w_glob_temp[key]
+        net_glob.load_state_dict(w_glob)
 
     net_glob.to(args.device)
     net_glob.train()
@@ -353,12 +349,20 @@ def main():
                 )
                 model_e.load_state_dict(f)
                 model_e.eval()
+                
+                # Validate on validation set (FedFold-style)
+                acc_val, loss_val = test_img(model_e, dataset_val, args)
+                # Also test on test set for comparison
                 acc_test, loss_test = test_img(model_e, dataset_test, args)
-                print("Testing accuracy " + str(ind) + ": {:.2f}".format(acc_test))
+                
+                print(f"Model {ind} - Val Acc: {acc_val:.2f}, Test Acc: {acc_test:.2f}")
+                
                 if args.wandb:
                     wandb.log({
-                        "Local model " + str(ind) + " test accuracy": acc_test,
-                        "Local model " + str(ind) + " test loss": loss_test
+                        f"Model {ind}/Val Accuracy": acc_val,
+                        f"Model {ind}/Val Loss": loss_val,
+                        f"Model {ind}/Test Accuracy": acc_test,
+                        f"Model {ind}/Test Loss": loss_test
                     }, step=iter)
 
     # Save models
