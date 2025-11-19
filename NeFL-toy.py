@@ -43,9 +43,8 @@ parser.add_argument('--weight_decay', type=float, default=0)
 parser.add_argument('--mode', type=str, default='normal') # normal worst
 parser.add_argument('--rs', type=int, default=0)
 
-parser.add_argument('--model_num', type=int, default=5)
-parser.add_argument('--min_flex_num', type=int, default=2, help="0:0~ max(0,tc-args.min_flex_num)")
-parser.add_argument('--max_flex_num', type=int, default=2, help="0:~4 min(tc+args.max_flex_num+1,5)")
+parser.add_argument('--train_ratio', type=str, default='16-1', help="Training ratio between large and small submodel, e.g., '16-1'")
+parser.add_argument('--device_ratio', type=str, default='S2-W8', help="Device ratio between strong and weak devices, e.g., 'S2-W8'")
 
 parser.add_argument('--num_experiment', type=int, default=3, help="the number of experiments")
 parser.add_argument('--model_name', type=str, default='resnet34') # wide_resnet101_2
@@ -95,7 +94,17 @@ def main():
     # args.ps = [0.2, 0.4, 0.6, 0.8, 1]
 
     args.ps, args.s2D = get_submodel_info(args)
-    args.num_models = len(args.s2D)
+    args.num_models = len(args.s2D)  # Should be 2 now
+    
+    # Parse device_ratio (e.g., "S2-W8" means Strong:Weak = 2:8)
+    device_parts = args.device_ratio.split('-')
+    strong_ratio = int(device_parts[0][1:])  # Remove 'S' and get number
+    weak_ratio = int(device_parts[1][1:])    # Remove 'W' and get number
+    total_ratio = strong_ratio + weak_ratio
+    
+    # Calculate number of strong and weak devices
+    args.num_strong_devices = int(args.num_users * strong_ratio / total_ratio)
+    args.num_weak_devices = args.num_users - args.num_strong_devices
 
     local_models = []
     if args.model_name == 'resnet18':
@@ -252,7 +261,7 @@ def main():
         model_name = args.model_name
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    args.name = '[' + str(args.dataset) + ']' + '[' + model_name + ']' + method_name + niid_name + str(args.frac)
+    args.name = '[' + str(args.dataset) + ']' + '[' + model_name + ']' + method_name + niid_name + str(args.frac) + '[' + args.train_ratio + ']' + '[' + args.device_ratio + ']'
     filename = './output/nefl/'+ timestamp + str(args.name) + str(args.rs)
     if not os.path.exists(filename):
         os.makedirs(filename)
@@ -265,7 +274,6 @@ def main():
     logger = get_logger(logpath=os.path.join(filename, 'logs'), filepath=os.path.abspath(__file__))
 
     lr = args.lr
-    mlist = [_ for _ in range(args.num_models)]
 
     for iter in range(1,args.epochs+1):
         if iter == args.epochs/2:
@@ -287,11 +295,14 @@ def main():
                 dev_spec_idx = 0
                 model_idx = 0
             else:
-                dev_spec_idx = min(idx//(args.num_users//args.num_models), args.num_models-1)
-                model_idx = random.choice(mlist[max(0,dev_spec_idx-args.min_flex_num):min(len(args.ps),dev_spec_idx+1+args.max_flex_num)])
-                # if model_idx >= 3:
-                #    model_idx = dev_spec_idx-1
-                # model_idx = random.choice(args.ps[max(0,dev_spec_idx-2):min(len(args.ps),dev_spec_idx+1+2)])
+                # Assign device to strong (large model) or weak (small model) group
+                # Strong devices (indices 0 to num_strong_devices-1) use large model (model_idx=1)
+                # Weak devices (indices num_strong_devices to num_users-1) use small model (model_idx=0)
+                if idx < args.num_strong_devices:
+                    model_idx = 1  # Large model
+                else:
+                    model_idx = 0  # Small model
+                    
             p_select = args.ps[model_idx]
             
             p_select_weight = extract_submodel_weight_from_globalM(net = copy.deepcopy(net_glob), BN_layer=BN_layers, Step_layer=Steps, p=p_select, model_i=model_idx)
@@ -318,7 +329,7 @@ def main():
             ti = 1
         else: ##########
             ti = args.num_models
-            
+
         if iter % 10 == 0:
         #     if args.mode == 'worst': ##########
         #         ti = 1

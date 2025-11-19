@@ -334,6 +334,359 @@ def getDataset(args):
     return dataset_train, dataset_test
 
 def get_submodel_info(args):
+    # Parse train_ratio (e.g., "16-1" means large:small = 16:1)
+    ratio_parts = args.train_ratio.split('-')
+    large_ratio = int(ratio_parts[0])
+    small_ratio = int(ratio_parts[1])
+    
+    # Calculate the width scaling factor for the small model
+    # If ratio is 16:1, the small model has sqrt(1/16) = 0.25 of the width
+    small_width_ratio = sqrt(small_ratio / large_ratio)
+    
+    if args.model_name == 'resnet56':
+        if args.method == 'W':
+            ps = [small_width_ratio, 1]
+            s2D = [
+                [ [[1, 1, 1, 1, 1, 1, 1, 1, 1] for _ in range(3)] ],
+                [ [[1, 1, 1, 1, 1, 1, 1, 1, 1] for _ in range(3)] ]
+            ]
+        elif args.method == 'WD':
+            # For WD method, we scale both width and depth
+            # Calculate depth for small model to achieve desired parameter ratio
+            total_blocks = 9
+            small_blocks = int(total_blocks * small_ratio / large_ratio)
+            if small_blocks < 1:
+                small_blocks = 1
+            
+            ps = [small_width_ratio, 1]
+            small_depth = [1] * small_blocks + [0] * (total_blocks - small_blocks)
+            s2D = [
+                [ [small_depth for _ in range(3)] ],
+                [ [[1, 1, 1, 1, 1, 1, 1, 1, 1] for _ in range(3)] ]
+            ]
+        elif args.method == 'DD':
+            ps = [1, 1]
+            # For depth-only scaling
+            total_blocks = 9
+            small_blocks = int(total_blocks * sqrt(small_ratio / large_ratio))
+            if small_blocks < 1:
+                small_blocks = 1
+            
+            small_depth = [1] * small_blocks + [0] * (total_blocks - small_blocks)
+            s2D = [
+                [ [small_depth for _ in range(3)] ],
+                [ [[1, 1, 1, 1, 1, 1, 1, 1, 1] for _ in range(3)] ]
+            ]
+        elif args.method == 'OD':
+            ps = [1, 1]
+            total_blocks = 9
+            # Use ordered dropout pattern
+            remaining_blocks = int(total_blocks * sqrt(small_ratio / large_ratio))
+            if remaining_blocks < 1:
+                remaining_blocks = 1
+            
+            small_depth = [1] * remaining_blocks + [total_blocks - remaining_blocks] + [0] * (total_blocks - remaining_blocks - 1) if remaining_blocks < total_blocks else [1] * total_blocks
+            s2D = [
+                [ [small_depth for _ in range(3)] ],
+                [ [[1, 1, 1, 1, 1, 1, 1, 1, 1] for _ in range(3)] ]
+            ]
+            
+    elif args.model_name == 'resnet110':
+        if args.method == 'W':
+            ps = [small_width_ratio, 1]
+            s2D = [
+                [ [[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] for _ in range(3)] ],
+                [ [[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] for _ in range(3)] ]
+            ]
+        elif args.method == 'WD':
+            total_blocks = 18
+            small_blocks = int(total_blocks * small_ratio / large_ratio)
+            if small_blocks < 1:
+                small_blocks = 1
+            
+            ps = [small_width_ratio, 1]
+            small_depth = [1] * small_blocks + [0] * (total_blocks - small_blocks)
+            s2D = [
+                [ [small_depth for _ in range(3)] ],
+                [ [[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] for _ in range(3)] ]
+            ]
+        elif args.method == 'DD':
+            ps = [1, 1]
+            total_blocks = 18
+            small_blocks = int(total_blocks * sqrt(small_ratio / large_ratio))
+            if small_blocks < 1:
+                small_blocks = 1
+            
+            small_depth = [1] * small_blocks + [0] * (total_blocks - small_blocks)
+            s2D = [
+                [ [small_depth for _ in range(3)] ],
+                [ [[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] for _ in range(3)] ]
+            ]
+        elif args.method == 'OD':
+            ps = [1, 1]
+            total_blocks = 18
+            remaining_blocks = int(total_blocks * sqrt(small_ratio / large_ratio))
+            if remaining_blocks < 1:
+                remaining_blocks = 1
+            
+            small_depth = [1] * remaining_blocks + [total_blocks - remaining_blocks] + [0] * (total_blocks - remaining_blocks - 1) if remaining_blocks < total_blocks else [1] * total_blocks
+            s2D = [
+                [ [small_depth for _ in range(3)] ],
+                [ [[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] for _ in range(3)] ]
+            ]
+            
+    elif args.model_name == 'resnet18':
+        if args.method == 'W':
+            ps = [small_width_ratio, 1]
+            s2D = [
+                [ [[1, 1], [1, 1], [1, 1], [1, 1]] ],
+                [ [[1, 1], [1, 1], [1, 1], [1, 1]] ]
+            ]
+        elif args.method == 'WD':
+            # ResNet18 has 2 blocks per layer, 4 layers
+            total_blocks_per_layer = 2
+            num_layers = 4
+            
+            # Decide which blocks to keep
+            target_param_ratio = small_ratio / large_ratio
+            small_blocks = max(1, int(num_layers * target_param_ratio))
+            
+            ps = [small_width_ratio, 1]
+            # Keep first few layers
+            small_structure = []
+            for i in range(num_layers):
+                if i < small_blocks:
+                    small_structure.append([1, 1])
+                else:
+                    small_structure.append([1, 0])
+            
+            s2D = [
+                [ small_structure ],
+                [ [[1, 1], [1, 1], [1, 1], [1, 1]] ]
+            ]
+        elif args.method == 'DD':
+            ps = [1, 1]
+            target_param_ratio = small_ratio / large_ratio
+            small_blocks = max(1, int(4 * sqrt(target_param_ratio)))
+            
+            small_structure = []
+            for i in range(4):
+                if i < small_blocks:
+                    small_structure.append([1, 1])
+                else:
+                    small_structure.append([0, 0])
+            
+            s2D = [
+                [ small_structure ],
+                [ [[1, 1], [1, 1], [1, 1], [1, 1]] ]
+            ]
+        elif args.method == 'OD':
+            ps = [1, 1]
+            target_param_ratio = small_ratio / large_ratio
+            remaining = max(1, int(4 * sqrt(target_param_ratio)))
+            
+            small_structure = []
+            blocks_to_drop = 4 - remaining
+            for i in range(4):
+                if i < remaining:
+                    small_structure.append([1, 1])
+                elif i == remaining and blocks_to_drop > 0:
+                    small_structure.append([blocks_to_drop, 0])
+                else:
+                    small_structure.append([0, 0])
+            
+            s2D = [
+                [ small_structure ],
+                [ [[1, 1], [1, 1], [1, 1], [1, 1]] ]
+            ]
+
+    elif args.model_name == 'resnet34':
+        if args.method == 'W':
+            ps = [small_width_ratio, 1]
+            s2D = [
+                [ [[1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1, 1, 1], [1, 1, 1]] ],
+                [ [[1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1, 1, 1], [1, 1, 1]] ]
+            ]
+        elif args.method == 'WD':
+            # ResNet34: layer1=3, layer2=4, layer3=6, layer4=3, total=16 blocks
+            total_blocks = 16
+            target_blocks = max(1, int(total_blocks * small_ratio / large_ratio))
+            
+            ps = [small_width_ratio, 1]
+            
+            # Distribute blocks across layers
+            layer_sizes = [3, 4, 6, 3]
+            small_layers = []
+            remaining = target_blocks
+            for size in layer_sizes:
+                if remaining >= size:
+                    small_layers.append([1] * size)
+                    remaining -= size
+                elif remaining > 0:
+                    small_layers.append([1] * remaining + [0] * (size - remaining))
+                    remaining = 0
+                else:
+                    small_layers.append([0] * size)
+            
+            s2D = [
+                [ small_layers ],
+                [ [[1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1, 1, 1], [1, 1, 1]] ]
+            ]
+        elif args.method == 'DD':
+            ps = [1, 1]
+            total_blocks = 16
+            target_blocks = max(1, int(total_blocks * sqrt(small_ratio / large_ratio)))
+            
+            layer_sizes = [3, 4, 6, 3]
+            small_layers = []
+            remaining = target_blocks
+            for size in layer_sizes:
+                if remaining >= size:
+                    small_layers.append([1] * size)
+                    remaining -= size
+                elif remaining > 0:
+                    small_layers.append([1] * remaining + [0] * (size - remaining))
+                    remaining = 0
+                else:
+                    small_layers.append([0] * size)
+            
+            s2D = [
+                [ small_layers ],
+                [ [[1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1, 1, 1], [1, 1, 1]] ]
+            ]
+        elif args.method == 'OD':
+            ps = [1, 1]
+            total_blocks = 16
+            target_blocks = max(1, int(total_blocks * sqrt(small_ratio / large_ratio)))
+            
+            layer_sizes = [3, 4, 6, 3]
+            small_layers = []
+            remaining = target_blocks
+            for i, size in enumerate(layer_sizes):
+                if remaining >= size:
+                    small_layers.append([1] * size)
+                    remaining -= size
+                elif remaining > 0:
+                    od_layer = [1] * remaining + [size - remaining] + [0] * (size - remaining - 1) if remaining < size else [1] * size
+                    small_layers.append(od_layer)
+                    remaining = 0
+                else:
+                    small_layers.append([0] * size)
+            
+            s2D = [
+                [ small_layers ],
+                [ [[1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1, 1, 1], [1, 1, 1]] ]
+            ]
+            
+    elif args.model_name == 'resnet101':
+        # ResNet101: layer1=3, layer2=4, layer3=23, layer4=3, total=33 blocks
+        total_blocks = 33
+        
+        if args.method == 'W':
+            ps = [small_width_ratio, 1]
+            s2D = [
+                [ [[1]*3, [1]*4, [1]*23, [1]*3] ],
+                [ [[1]*3, [1]*4, [1]*23, [1]*3] ]
+            ]
+        elif args.method == 'WD':
+            target_blocks = max(1, int(total_blocks * small_ratio / large_ratio))
+            ps = [small_width_ratio, 1]
+            
+            layer_sizes = [3, 4, 23, 3]
+            small_layers = []
+            remaining = target_blocks
+            for size in layer_sizes:
+                if remaining >= size:
+                    small_layers.append([1] * size)
+                    remaining -= size
+                elif remaining > 0:
+                    small_layers.append([1] * remaining + [0] * (size - remaining))
+                    remaining = 0
+                else:
+                    small_layers.append([0] * size)
+            
+            s2D = [
+                [ small_layers ],
+                [ [[1]*3, [1]*4, [1]*23, [1]*3] ]
+            ]
+        elif args.method == 'DD':
+            ps = [1, 1]
+            target_blocks = max(1, int(total_blocks * sqrt(small_ratio / large_ratio)))
+            
+            layer_sizes = [3, 4, 23, 3]
+            small_layers = []
+            remaining = target_blocks
+            for size in layer_sizes:
+                if remaining >= size:
+                    small_layers.append([1] * size)
+                    remaining -= size
+                elif remaining > 0:
+                    small_layers.append([1] * remaining + [0] * (size - remaining))
+                    remaining = 0
+                else:
+                    small_layers.append([0] * size)
+            
+            s2D = [
+                [ small_layers ],
+                [ [[1]*3, [1]*4, [1]*23, [1]*3] ]
+            ]
+        elif args.method == 'OD':
+            ps = [1, 1]
+            target_blocks = max(1, int(total_blocks * sqrt(small_ratio / large_ratio)))
+            
+            layer_sizes = [3, 4, 23, 3]
+            small_layers = []
+            remaining = target_blocks
+            for size in layer_sizes:
+                if remaining >= size:
+                    small_layers.append([1] * size)
+                    remaining -= size
+                elif remaining > 0:
+                    od_layer = [1] * remaining + [size - remaining] + [0] * (size - remaining - 1) if remaining < size else [1] * size
+                    small_layers.append(od_layer)
+                    remaining = 0
+                else:
+                    small_layers.append([0] * size)
+            
+            s2D = [
+                [ small_layers ],
+                [ [[1]*3, [1]*4, [1]*23, [1]*3] ]
+            ]
+            
+    elif args.model_name == 'wide_resnet101_2':
+        # Same structure as resnet101
+        total_blocks = 33
+        
+        if args.method == 'W':
+            ps = [small_width_ratio, 1]
+            s2D = [
+                [ [[1]*3, [1]*4, [1]*23, [1]*3] ],
+                [ [[1]*3, [1]*4, [1]*23, [1]*3] ]
+            ]
+        elif args.method == 'WD':
+            target_blocks = max(1, int(total_blocks * small_ratio / large_ratio))
+            ps = [small_width_ratio, 1]
+            
+            layer_sizes = [3, 4, 23, 3]
+            small_layers = []
+            remaining = target_blocks
+            for size in layer_sizes:
+                if remaining >= size:
+                    small_layers.append([1] * size)
+                    remaining -= size
+                elif remaining > 0:
+                    small_layers.append([1] * remaining + [0] * (size - remaining))
+                    remaining = 0
+                else:
+                    small_layers.append([0] * size)
+            
+            s2D = [
+                [ small_layers ],
+                [ [[1]*3, [1]*4, [1]*23, [1]*3] ]
+            ]
+        # Add DD and OD methods similarly if needed
+        
+    return ps, s2D
     if args.model_name == 'resnet56':
         if args.method == 'W':
             ps = [sqrt(0.2), sqrt(0.4), sqrt(0.6), sqrt(0.8), 1]
