@@ -313,12 +313,17 @@ def main():
 
         loss_train.append(loss_avg)
         #loss_train에 loss_avg 값 추가
+        
+        if args.mode == 'worst': ##########
+            ti = 1
+        else: ##########
+            ti = args.num_models
+            
         if iter % 10 == 0:
-            if args.mode == 'worst': ##########
-                ti = 1
-            else: ##########
-                ti = args.num_models
-
+        #     if args.mode == 'worst': ##########
+        #         ti = 1
+        #     else: ##########
+        #         ti = args.num_models
             for ind in range(ti):
                 p = args.ps[ind]
                 model_e = copy.deepcopy(local_models[ind])

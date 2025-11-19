@@ -217,8 +217,10 @@ def getDataset(args):
             transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
-        dataset_train = datasets.CIFAR10('/home/hong/NeFL/.data/cifar', train=True, download=True, transform=transform_train)
-        dataset_test = datasets.CIFAR10('/home/hong/NeFL/.data/cifar', train=False, download=True, transform=transform_test)
+        # dataset_train = datasets.CIFAR10('/home/hong/NeFL/.data/cifar', train=True, download=True, transform=transform_train)
+        # dataset_test = datasets.CIFAR10('/home/hong/NeFL/.data/cifar', train=False, download=True, transform=transform_test)
+        dataset_train = datasets.CIFAR10('.data/cifar', train=True, download=True, transform=transform_train)
+        dataset_test = datasets.CIFAR10('.data/cifar', train=False, download=True, transform=transform_test)
     elif args.dataset =='cifar100':
         ## CIFAR
         args.num_classes = 100
