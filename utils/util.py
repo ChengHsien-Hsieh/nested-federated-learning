@@ -343,7 +343,7 @@ def change(originw, w, w1, BN_layer, p_max, p_select):
   return w
 
 
-def get_logger(logpath, filepath, package_files=[], displaying=True, saving=True, debug=False):
+def get_logger(logpath, filepath, package_files=[], displaying=True, saving=True, debug=False, log_code=False):
     logger = logging.getLogger()
     if debug:
         level = logging.DEBUG
@@ -360,13 +360,16 @@ def get_logger(logpath, filepath, package_files=[], displaying=True, saving=True
         console_handler.setLevel(level)
         # console_handler.terminator = ""
         logger.addHandler(console_handler)
-    logger.info(filepath)
-    with open(filepath, "r") as f:
-        logger.info(f.read())
+    
+    # Only log code if explicitly requested
+    if log_code:
+        logger.info(filepath)
+        with open(filepath, "r") as f:
+            logger.info(f.read())
 
-    for f in package_files:
-        logger.info(f)
-        with open(f, "r") as package_f:
-            logger.info(package_f.read())
+        for f in package_files:
+            logger.info(f)
+            with open(f, "r") as package_f:
+                logger.info(package_f.read())
 
     return logger

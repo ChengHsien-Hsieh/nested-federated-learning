@@ -360,7 +360,7 @@ def main():
 
     if args.wandb:
         # wandb.init(dir=filename, project='fjord_psel__', name='fjord' + args.mode)
-        run = wandb.init(dir=filename, project='NeFL-240426', name= str(args.name)+ str(args.rs), reinit=True, settings=wandb.Settings(code_dir="."))
+        run = wandb.init(dir=filename, project='NeFL-240426', name= str(args.name)+ str(args.rs), reinit=True)
         # wandb.run.name = str(stepSize2D) + timestamp
         wandb.config.update(args)
     logger = get_logger(logpath=os.path.join(filename, 'logs'), filepath=os.path.abspath(__file__))
@@ -501,26 +501,43 @@ def main():
         else: ##########
             ti = args.num_models
 
+        # ============ Test accuracy every round ============
+        # Test global model
+        net_glob.eval()
+        acc_test_global, loss_test_global = test_img(net_glob, dataset_test, args)
+        net_glob.train()
+        
         if iter % 10 == 0:
-        #     if args.mode == 'worst': ##########
-        #         ti = 1
-        #     else: ##########
-        #         ti = args.num_models
-            for ind in range(ti):
-                p = args.ps[ind]
-                model_e = copy.deepcopy(local_models[ind])
-                
-                f = extract_submodel_weight_from_globalM(net = copy.deepcopy(net_glob), BN_layer=BN_layers, Step_layer=Steps, p=p, model_i=ind)
-                model_e.load_state_dict(f)
-                #print(model_1)
-                model_e.eval()
-                acc_test, loss_test = test_img(model_e, dataset_test, args)
-                print("Testing accuracy " + str(ind) + ": {:.2f}".format(acc_test))
-                if args.wandb:
-                    wandb.log({
-                        "Communication round": iter,
-                        "Local model " + str(ind) + " test accuracy": acc_test
-                    })
+            print("Global model test accuracy: {:.2f}".format(acc_test_global))
+        
+        # Prepare wandb log dictionary
+        wandb_log_dict = {
+            "Global model test accuracy": acc_test_global,
+            "Global model test loss": loss_test_global,
+        }
+        
+        # Test each local (sub)model
+        for ind in range(ti):
+            p = args.ps[ind]
+            model_e = copy.deepcopy(local_models[ind])
+            
+            f = extract_submodel_weight_from_globalM(net = copy.deepcopy(net_glob), BN_layer=BN_layers, Step_layer=Steps, p=p, model_i=ind)
+            model_e.load_state_dict(f)
+            model_e.eval()
+            acc_test, loss_test = test_img(model_e, dataset_test, args)
+            
+            # Print every 10 rounds to avoid cluttering output
+            if iter % 10 == 0:
+                print("  Local model " + str(ind) + " test accuracy: {:.2f}".format(acc_test))
+            
+            # Add to wandb log dictionary
+            wandb_log_dict["Local model " + str(ind) + " test accuracy"] = acc_test
+            wandb_log_dict["Local model " + str(ind) + " test loss"] = loss_test
+        
+        # Log to wandb with explicit step (communication round)
+        if args.wandb:
+            wandb.log(wandb_log_dict, step=iter)
+        # ==================================================
 
     filename = './output/nefl/'+ timestamp + str(args.name) + str(args.rs) + '/models'
     if not os.path.exists(filename):

@@ -127,8 +127,13 @@ def cifar_noniid(args, dataset):
     # {0: 5000, 1: 5000, 2: 5000, 3: 5000, 4: 5000, 5: 5000, 6: 5000, 7: 5000, 8: 5000, 9: 5000}
     idx_shard = [i for i in range(num_shards)]
     dict_users = {i: np.array([], dtype='int64') for i in range(args.num_users)}
-    idxs = np.arange(num_shards*num_imgs)
-    labels = np.array(dataset.targets)
+    # idxs = np.arange(num_shards*num_imgs)
+    # labels = np.array(dataset.targets)
+
+    # Use only the samples that can be evenly divided
+    total_imgs = num_shards * num_imgs
+    idxs = np.arange(total_imgs)
+    labels = np.array(dataset.targets[:total_imgs])
     
     # sort labels
     idxs_labels = np.vstack((idxs, labels))
