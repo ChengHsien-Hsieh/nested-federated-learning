@@ -10,6 +10,7 @@ from torchvision.models import ResNet18_Weights, ResNet34_Weights, ResNet101_Wei
 
 import argparse
 import os
+import time
 import torchsummary
 import wandb
 from datetime import datetime
@@ -56,12 +57,103 @@ parser.add_argument('--wandb', type=bool, default=True)
 parser.add_argument('--dataset', type=str, default='cifar10') # stl10, cifar10, svhn, cinic
 parser.add_argument('--method', type=str, default='WD') # DD, W, WD / fjord
 
+# ============ Computation & Communication Heterogeneity ============
+parser.add_argument('--strong_comp', type=float, default=2.01, help='Strong device computation time (GPU: NVIDIA 2080 Ti)')
+parser.add_argument('--weak_comp', type=float, default=2.56, help='Weak device computation time (CPU: Intel Core i5)')
+parser.add_argument('--strong_bw', type=float, default=10, help='Strong device bandwidth in Mbps (weak comm for strong device)')
+parser.add_argument('--weak_bw', type=float, default=100, help='Weak device bandwidth in Mbps (strong comm for weak device)')
+parser.add_argument('--random_bw', action='store_true', help='Enable random bandwidth sampling')
+parser.add_argument('--comm_scenario', type=str, default='fixed_fast', 
+                    help='Communication scenario: fixed_fast, random_fast, fixed_slow, random_slow')
+parser.add_argument('--measure_wall_time', action='store_true', 
+                    help='Enable actual wall time measurement (for calibrating strong_comp/weak_comp parameters)')
+parser.add_argument('--force_cpu', action='store_true',
+                    help='Force using CPU for training (to measure weak device computation time)')
+# ==================================================================
+
 # parser.add_argument('--name', type=str, default='[cifar10][NeFLADD2][R56]') # L-A: bad character
 args = parser.parse_args()
-args.device = 'cuda:' + args.device_id
+
+# Device selection: Force CPU if measuring weak device time
+if args.force_cpu:
+    args.device = 'cpu'
+    print("\n⚠️  FORCE CPU MODE: Training on CPU to measure weak device computation time")
+else:
+    args.device = 'cuda:' + args.device_id
+    print(f"\n✓ GPU MODE: Training on CUDA device {args.device_id}")
+
+# Set communication scenario presets
+if args.comm_scenario == 'fixed_fast':
+    args.strong_bw = 10  # Strong device with weak comm
+    args.weak_bw = 100   # Weak device with strong comm
+    args.random_bw = False
+elif args.comm_scenario == 'random_fast':
+    args.strong_bw = 10
+    args.weak_bw = 100
+    args.random_bw = True
+elif args.comm_scenario == 'fixed_slow':
+    args.strong_bw = 3
+    args.weak_bw = 30
+    args.random_bw = False
+elif args.comm_scenario == 'random_slow':
+    args.strong_bw = 3
+    args.weak_bw = 30
+    args.random_bw = True
+
+print(f"\n=== System Heterogeneity Configuration ===")
+print(f"Computation: Strong={args.strong_comp}s, Weak={args.weak_comp}s")
+print(f"Communication: {args.comm_scenario}")
+print(f"  Strong device: {args.strong_bw} Mbps (min)")
+print(f"  Weak device: {args.weak_bw} Mbps (max)")
+print(f"  Random sampling: {args.random_bw}")
+
+if args.measure_wall_time:
+    print(f"\n🔬 WALL TIME MEASUREMENT MODE ENABLED")
+    print(f"   This mode will measure ACTUAL training time on your hardware.")
+    print(f"   Use this to calibrate --strong_comp and --weak_comp parameters.")
+    print(f"   Current device: {'CPU (weak)' if args.force_cpu else 'GPU (strong)'}")
+
+print(f"==========================================\n")
+
 # args.ps = [sqrt(0.2), sqrt(0.4), sqrt(0.6), sqrt(0.8), 1] # only width -> param. size [0.2, 0.4, 0.6, 0.8, 1]
 # args.ps = [0.2, 0.4, 0.6, 0.8, 1]
 # parameter size gets 1/r^2 [r1, r2, r3, r4, r5]
+
+def simulate_time(device_type, model_size_bytes, args):
+    """
+    Simulate computation and communication time for heterogeneous devices.
+    
+    Args:
+        device_type: 'S' (Strong) or 'W' (Weak)
+        model_size_bytes: Size of model in bytes
+        args: Arguments containing bandwidth and computation settings
+    
+    Returns:
+        (computation_time, communication_time) in seconds
+    """
+    # Convert Mbps to bytes per second
+    min_bw_bytes = args.strong_bw * 1e6 / 8
+    max_bw_bytes = args.weak_bw * 1e6 / 8
+    
+    if args.random_bw:
+        # Random bandwidth sampling
+        bandwidth = np.random.uniform(min_bw_bytes, max_bw_bytes)
+        if device_type == 'S':
+            comp_time = args.strong_comp
+            comm_time = model_size_bytes / bandwidth
+        else:
+            comp_time = args.weak_comp
+            comm_time = model_size_bytes / bandwidth
+    else:
+        # Fixed bandwidth: Strong device gets weak comm, Weak device gets strong comm
+        if device_type == 'S':
+            comp_time = args.strong_comp
+            comm_time = model_size_bytes / min_bw_bytes  # Strong device with weak bandwidth
+        else:
+            comp_time = args.weak_comp
+            comm_time = model_size_bytes / max_bw_bytes  # Weak device with strong bandwidth
+    
+    return comp_time, comm_time
 
 """ Vaying width of the network """
 '''
@@ -273,7 +365,37 @@ def main():
         wandb.config.update(args)
     logger = get_logger(logpath=os.path.join(filename, 'logs'), filepath=os.path.abspath(__file__))
 
+    # ============ Device Type Assignment (System Heterogeneity) ============
+    device_types = []
+    for i in range(args.num_users):
+        if i < args.num_strong_devices:
+            device_types.append('S')  # Strong device
+        else:
+            device_types.append('W')  # Weak device
+    
+    print(f"\n=== Device Assignment ===")
+    print(f"Total devices: {args.num_users}")
+    print(f"Strong devices (GPU): {args.num_strong_devices}")
+    print(f"Weak devices (CPU): {args.num_weak_devices}")
+    print(f"Device ratio: {args.device_ratio}")
+    print(f"========================\n")
+    
+    # Calculate model sizes for communication time simulation
+    model_sizes = []  # in bytes
+    for i in range(args.num_models):
+        model_size = 0
+        for param in local_models[i].parameters():
+            model_size += param.data.nelement() * param.data.element_size()
+        model_sizes.append(model_size)
+        print(f"Model {i} size: {model_size / (1024*1024):.2f} MB")
+    # ======================================================================
+
     lr = args.lr
+    
+    # For tracking system heterogeneity metrics
+    total_wall_time = 0.0
+    total_computation_time = 0.0
+    total_communication_time = 0.0
 
     for iter in range(1,args.epochs+1):
         if iter == args.epochs/2:
@@ -287,21 +409,34 @@ def main():
         
         m = max(int(args.frac * args.num_users), 1)
         idxs_users = np.random.choice(range(args.num_users), m, replace=False)
+        
+        # Track max wall time for this round (straggler effect)
+        round_max_wall_time = 0.0
+        round_computation_times = []
+        round_communication_times = []
         # weight_for_bn = [] ####
         # step_weights = []
         
         for idx in idxs_users:
+            device_type = device_types[idx]  # Get device type (S or W)
+            
             if args.mode == 'worst':
                 dev_spec_idx = 0
                 model_idx = 0
             else:
-                # Assign device to strong (large model) or weak (small model) group
-                # Strong devices (indices 0 to num_strong_devices-1) use large model (model_idx=1)
-                # Weak devices (indices num_strong_devices to num_users-1) use small model (model_idx=0)
-                if idx < args.num_strong_devices:
-                    model_idx = 1  # Large model
+                # Original NeFL device-model assignment logic
+                dev_spec_idx = min(idx//(args.num_users//args.num_models), args.num_models-1)
+                # model_idx = random.choice(mlist[max(0,dev_spec_idx-args.min_flex_num):min(len(args.ps),dev_spec_idx+1+args.max_flex_num)])
+                
+                # Simple assignment for 2-model setup:
+                # Strong devices (S) train large model (index 1)
+                # Weak devices (W) train small model (index 0)
+                if args.num_models == 2:
+                    model_idx = 1 if device_type == 'S' else 0
                 else:
-                    model_idx = 0  # Small model
+                    # Original flexible assignment for 5-model setup
+                    mlist = [_ for _ in range(args.num_models)]
+                    model_idx = random.choice(mlist[max(0,dev_spec_idx-2):min(len(args.ps),dev_spec_idx+1+2)])
                     
             p_select = args.ps[model_idx]
             
@@ -310,17 +445,53 @@ def main():
             model_select = local_models[model_idx]
             model_select.load_state_dict(p_select_weight)
             local = LocalUpdateM(args, dataset=dataset_train, idxs=dict_users[idx])
+            
+            # ============ Measure Actual Wall Time ============
+            if args.measure_wall_time:
+                actual_wall_start = time.time()
+            # =================================================
+            
             weight, loss = local.train(net=copy.deepcopy(model_select).to(args.device), learning_rate=lr)
-            # seperated_weights.append([copy.deepcopy(weight), model_idx])
-            # weight_for_bn.append([model_idx, copy.deepcopy(weight)]) ####
+            
+            # ============ Record Actual Wall Time ============
+            if args.measure_wall_time:
+                actual_wall_time = time.time() - actual_wall_start
+                device_wall_time = actual_wall_time
+                print(f"    Device {idx} ({device_type}) Model {model_idx}: Actual wall time = {actual_wall_time:.4f}s")
+                round_computation_times.append(device_wall_time)
+            else:
+                # Simulate computation and communication time
+                comp_time, comm_time = simulate_time(device_type, model_sizes[model_idx], args)
+                device_wall_time = comp_time * args.local_ep  # Total computation time
+                round_computation_times.append(device_wall_time)
+                round_communication_times.append(comm_time)
+            # ================================================
+            
+            # Track max wall time (straggler effect)
+            round_max_wall_time = max(round_max_wall_time, device_wall_time)
+            
             w_locals.append([copy.deepcopy(weight), model_idx])
             loss_locals.append(copy.deepcopy(loss))
+        
+        # Update total time metrics
+        total_wall_time += round_max_wall_time
+        total_computation_time += sum(round_computation_times)
+        total_communication_time += sum(round_communication_times)
         
         w_glob, BN_layers, Steps = NeFedAvg(w_locals, BN_layers, Steps, args, com_layers, sing_layers)
         net_glob.load_state_dict(w_glob)
         loss_avg = sum(loss_locals) / len(loss_locals)
 
-        print('Round {:3d}, Average loss {:.3f}'.format(iter, loss_avg))
+        if args.measure_wall_time:
+            print('Round {:3d}, Average loss {:.3f}, Measured wall time: {:.2f}s (Max: {:.2f}s, Avg: {:.2f}s)'.format(
+                iter, loss_avg, round_max_wall_time,
+                max(round_computation_times) if round_computation_times else 0,
+                np.mean(round_computation_times) if round_computation_times else 0))
+        else:
+            print('Round {:3d}, Average loss {:.3f}, Round wall time: {:.2f}s (Max comp: {:.2f}s, Avg comm: {:.2f}s)'.format(
+                iter, loss_avg, round_max_wall_time, 
+                max(round_computation_times) if round_computation_times else 0, 
+                np.mean(round_communication_times) if round_communication_times else 0))
 
         loss_train.append(loss_avg)
         #loss_train에 loss_avg 값 추가
@@ -368,8 +539,50 @@ def main():
     acc_test, loss_test = test_img(net_glob, dataset_test, args)
     print("Training accuracy: {:.2f}".format(acc_train))
     print("Testing accuracy: {:.2f}".format(acc_test))
+    
+    # ============ System Heterogeneity Summary ============
+    print(f"\n{'='*60}")
+    if args.measure_wall_time:
+        print(f"Wall Time Measurement Results")
+        print(f"{'='*60}")
+        print(f"Device: {'CPU (weak)' if args.force_cpu else 'GPU (strong)'}")
+        print(f"Model: {args.model_name}")
+        print(f"Dataset: {args.dataset}")
+        print(f"Local epochs: {args.local_ep}")
+        print(f"\nMeasurement Results:")
+        print(f"  Total wall time: {total_wall_time:.2f}s")
+        print(f"  Avg wall time per round: {total_wall_time / args.epochs:.4f}s")
+        print(f"  Avg wall time per device per round: {total_computation_time / (args.epochs * args.frac * args.num_users):.4f}s")
+        print(f"\n💡 Recommended parameter:")
+        if args.force_cpu:
+            print(f"  --weak_comp {total_wall_time / args.epochs:.4f}")
+        else:
+            print(f"  --strong_comp {total_wall_time / args.epochs:.4f}")
+    else:
+        print(f"System Heterogeneity Analysis")
+        print(f"{'='*60}")
+        print(f"Communication Scenario: {args.comm_scenario}")
+        print(f"  Strong device: {args.strong_comp}s compute, {args.strong_bw} Mbps comm")
+        print(f"  Weak device: {args.weak_comp}s compute, {args.weak_bw} Mbps comm")
+        print(f"  Random sampling: {args.random_bw}")
+        print(f"\nTotal Training Metrics:")
+        print(f"  Total wall time: {total_wall_time:.2f}s")
+        print(f"  Total computation time: {total_computation_time:.2f}s")
+        print(f"  Total communication time: {total_communication_time:.2f}s")
+        print(f"  Avg wall time per round: {total_wall_time / args.epochs:.2f}s")
+    print(f"{'='*60}\n")
+    # ====================================================
   
     if args.wandb:
+        # Log final system heterogeneity metrics
+        wandb.log({
+            "Final/Total Wall Time": total_wall_time,
+            "Final/Total Computation Time": total_computation_time,
+            "Final/Total Communication Time": total_communication_time,
+            "Final/Avg Wall Time per Round": total_wall_time / args.epochs,
+            "Final/Train Accuracy": acc_train,
+            "Final/Test Accuracy": acc_test
+        })
         run.finish()
 
 
