@@ -63,7 +63,7 @@ parser.add_argument('--weak_comp', type=float, default=2.56, help='Weak device c
 parser.add_argument('--strong_bw', type=float, default=10, help='Strong device bandwidth in Mbps (weak comm for strong device)')
 parser.add_argument('--weak_bw', type=float, default=100, help='Weak device bandwidth in Mbps (strong comm for weak device)')
 parser.add_argument('--random_bw', action='store_true', help='Enable random bandwidth sampling')
-parser.add_argument('--comm_scenario', type=str, default='fixed_fast', 
+parser.add_argument('--comm_scenario', type=str, default='random_fast', 
                     help='Communication scenario: fixed_fast, random_fast, fixed_slow, random_slow')
 parser.add_argument('--measure_wall_time', action='store_true', 
                     help='Enable actual wall time measurement (for calibrating strong_comp/weak_comp parameters)')
