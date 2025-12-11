@@ -74,6 +74,11 @@ parser.add_argument('--force_cpu', action='store_true',
 # ============ Data Augmentation ============
 parser.add_argument('--augment', action='store_true',
                     help='Enable strong data augmentation (Rotation + ColorJitter)')
+parser.add_argument('--virtual_size', type=int, default=0,
+                    help='Virtual dataset size per client for data augmentation. '
+                         'If > 0, each client\'s dataset will be virtually expanded to this size. '
+                         'Useful when num_users is large and each client has few samples. '
+                         'Example: --virtual_size 500 expands 5 samples to 500 virtual samples.')
 # ===========================================
 
 # parser.add_argument('--name', type=str, default='[cifar10][NeFLADD2][R56]') # L-A: bad character
@@ -177,7 +182,12 @@ len(shape) = 0: bn1.num_batches_tracked
 
 # Print augmentation settings
 print(f"\n=== Data Augmentation Configuration ===")
-if args.augment:
+if args.virtual_size > 0:
+    print(f"  Virtual size augmentation: ENABLED (target size: {args.virtual_size})")
+    print(f"  Augmentations: RandomCrop, HorizontalFlip, Rotation(15), ColorJitter, RandomAffine")
+    # Force augment mode when virtual_size is used
+    args.augment = True
+elif args.augment:
     print(f"  Strong augmentation: ENABLED")
     print(f"  Augmentations: RandomCrop, HorizontalFlip, Rotation(15), ColorJitter")
 else:
@@ -418,7 +428,7 @@ def main():
     
     # For tracking system heterogeneity metrics
     total_wall_time = 0.0
-    total_computation_time = 0.0
+    total_computation_time = 0.0  
     total_communication_time = 0.0
 
     for iter in range(1,args.epochs+1):
@@ -576,7 +586,11 @@ def main():
     # testing
     net_glob.eval()
 
-    acc_train, loss_train = test_img(net_glob, dataset_train, args)
+    # Use eval version of training dataset if virtual augmentation is enabled
+    if hasattr(args, 'dataset_train_eval'):
+        acc_train, loss_train = test_img(net_glob, args.dataset_train_eval, args)
+    else:
+        acc_train, loss_train = test_img(net_glob, dataset_train, args)
     acc_test, loss_test = test_img(net_glob, dataset_test, args)
     print("Training accuracy: {:.2f}".format(acc_train))
     print("Testing accuracy: {:.2f}".format(acc_test))

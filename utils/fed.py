@@ -135,8 +135,25 @@ class LocalUpdateM(object):
         self.loss_func = nn.CrossEntropyLoss()
         self.selected_clients = []
         
-        # Always use DatasetSplit - augmentation is handled in getDataset's transform
-        self.ldr_train = DataLoader(DatasetSplit(dataset, idxs), batch_size=args.local_bs, shuffle=True)
+        # Check if virtual size augmentation is enabled
+        use_virtual_augment = hasattr(args, 'virtual_size') and args.virtual_size > 0
+        
+        if use_virtual_augment:
+            # Use AugmentedDatasetSplit for virtual size expansion
+            # Dataset should return PIL Images (transform=None in getDataset)
+            self.ldr_train = DataLoader(
+                AugmentedDatasetSplit(
+                    dataset, 
+                    idxs, 
+                    virtual_size=args.virtual_size,
+                    augment=True
+                ), 
+                batch_size=args.local_bs, 
+                shuffle=True
+            )
+        else:
+            # Standard DatasetSplit - augmentation is handled in getDataset's transform
+            self.ldr_train = DataLoader(DatasetSplit(dataset, idxs), batch_size=args.local_bs, shuffle=True)
 
     def train(self, net, learning_rate):
         net.train()

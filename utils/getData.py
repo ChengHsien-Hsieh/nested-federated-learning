@@ -211,10 +211,17 @@ def cifar_noniid(args, dataset):
 def getDataset(args):
     if args.dataset =='cifar10':
         ## CIFAR
+        # Check if virtual size augmentation is used
+        use_virtual_augment = hasattr(args, 'virtual_size') and args.virtual_size > 0
         # Check if stronger augmentation is requested
         use_strong_augment = hasattr(args, 'augment') and args.augment
         
-        if use_strong_augment:
+        if use_virtual_augment:
+            # Virtual size augmentation mode:
+            # Return dataset WITHOUT transform (PIL Images) for training
+            # Transforms will be applied in AugmentedDatasetSplit
+            transform_train = None
+        elif use_strong_augment:
             # Stronger augmentation for sparse data scenarios (large num_users)
             transform_train = transforms.Compose([
                 transforms.RandomCrop(32, padding=4),
@@ -241,6 +248,12 @@ def getDataset(args):
         # dataset_test = datasets.CIFAR10('/home/hong/NeFL/.data/cifar', train=False, download=True, transform=transform_test)
         dataset_train = datasets.CIFAR10('.data/cifar', train=True, download=True, transform=transform_train)
         dataset_test = datasets.CIFAR10('.data/cifar', train=False, download=True, transform=transform_test)
+        
+        # For virtual augmentation mode, also create a version with transform for evaluation
+        if use_virtual_augment:
+            dataset_train_eval = datasets.CIFAR10('.data/cifar', train=True, download=True, transform=transform_test)
+            # Store eval dataset in args for later use
+            args.dataset_train_eval = dataset_train_eval
     elif args.dataset =='cifar100':
         ## CIFAR
         args.num_classes = 100
