@@ -71,6 +71,11 @@ parser.add_argument('--force_cpu', action='store_true',
                     help='Force using CPU for training (to measure weak device computation time)')
 # ==================================================================
 
+# ============ Data Augmentation ============
+parser.add_argument('--augment', action='store_true',
+                    help='Enable strong data augmentation (Rotation + ColorJitter)')
+# ===========================================
+
 # parser.add_argument('--name', type=str, default='[cifar10][NeFLADD2][R56]') # L-A: bad character
 args = parser.parse_args()
 
@@ -170,7 +175,26 @@ len(shape) = 1: bn1.weight/bias/running_mean/var [16/32/...] / (linear.bias) [10
 len(shape) = 0: bn1.num_batches_tracked
 '''
 
+# Print augmentation settings
+print(f"\n=== Data Augmentation Configuration ===")
+if args.augment:
+    print(f"  Strong augmentation: ENABLED")
+    print(f"  Augmentations: RandomCrop, HorizontalFlip, Rotation(15), ColorJitter")
+else:
+    print(f"  Standard augmentation: RandomCrop + HorizontalFlip")
+print(f"========================================\n")
+
 dataset_train, dataset_test = getDataset(args)
+
+# Calculate and print data distribution info
+samples_per_user = len(dataset_train) // args.num_users
+print(f"📊 Data Distribution:")
+print(f"  Total training samples: {len(dataset_train)}")
+print(f"  Number of users: {args.num_users}")
+print(f"  Average samples per user: {samples_per_user}")
+if samples_per_user < 50:
+    print(f"  ⚠️  WARNING: Very few samples per user! Consider using --augment for stronger augmentation")
+print()
 
 if args.noniid == 'noniid':
     dict_users = cifar_noniid(args, dataset_train)

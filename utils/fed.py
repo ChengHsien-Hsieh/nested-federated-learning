@@ -2,6 +2,7 @@ from torch.utils.data import DataLoader, Dataset
 from torch import nn
 import torch
 import torch.nn.functional as F
+from torchvision import transforms
 
 from torch.optim.lr_scheduler import LambdaLR
 import math
@@ -17,6 +18,84 @@ class DatasetSplit(Dataset):
 
     def __getitem__(self, item):
         image, label = self.dataset[self.idxs[item]]
+        return image, label
+
+
+class AugmentedDatasetSplit(Dataset):
+    """
+    Dataset wrapper that supports:
+    1. Strong data augmentation for small datasets
+    2. Virtual size expansion (repeat samples with different augmentations)
+    
+    This is useful when num_users is large and each client has very few samples.
+    
+    NOTE: When using this class, the dataset should return PIL Images (no transform).
+    """
+
+    def __init__(self, dataset, idxs, virtual_size=0, augment=True):
+        """
+        Args:
+            dataset: Original dataset that returns PIL Images (transform=None)
+            idxs: Indices for this client's data
+            virtual_size: If > 0, expand dataset to this size by repeating samples
+                          If 0, use original size
+            augment: Whether to apply strong augmentation
+        """
+        self.dataset = dataset
+        self.idxs = list(idxs)
+        self.augment = augment
+        
+        # Virtual size: minimum of virtual_size or original size
+        if virtual_size > 0:
+            self.virtual_size = max(virtual_size, len(self.idxs))
+        else:
+            self.virtual_size = len(self.idxs)
+        
+        # Strong augmentation transforms (for PIL Images)
+        if augment:
+            self.strong_transform = transforms.Compose([
+                # Input is PIL Image, no need for ToPILImage
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomRotation(15),
+                transforms.ColorJitter(
+                    brightness=0.2, 
+                    contrast=0.2, 
+                    saturation=0.2, 
+                    hue=0.1
+                ),
+                transforms.RandomAffine(
+                    degrees=0, 
+                    translate=(0.1, 0.1), 
+                    scale=(0.9, 1.1)
+                ),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    (0.4914, 0.4822, 0.4465), 
+                    (0.2023, 0.1994, 0.2010)
+                ),
+            ])
+        else:
+            # Even without strong augmentation, we need ToTensor and Normalize
+            self.strong_transform = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    (0.4914, 0.4822, 0.4465), 
+                    (0.2023, 0.1994, 0.2010)
+                ),
+            ])
+
+    def __len__(self):
+        return self.virtual_size
+
+    def __getitem__(self, item):
+        # Cycle through original indices if virtual_size > len(idxs)
+        real_idx = self.idxs[item % len(self.idxs)]
+        image, label = self.dataset[real_idx]
+        
+        # image is a PIL Image, apply transform
+        image = self.strong_transform(image)
+        
         return image, label
 
 class LocalUpdate(object):
@@ -55,6 +134,8 @@ class LocalUpdateM(object):
         self.args = args
         self.loss_func = nn.CrossEntropyLoss()
         self.selected_clients = []
+        
+        # Always use DatasetSplit - augmentation is handled in getDataset's transform
         self.ldr_train = DataLoader(DatasetSplit(dataset, idxs), batch_size=args.local_bs, shuffle=True)
 
     def train(self, net, learning_rate):

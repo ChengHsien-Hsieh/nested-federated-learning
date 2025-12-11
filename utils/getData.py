@@ -211,12 +211,27 @@ def cifar_noniid(args, dataset):
 def getDataset(args):
     if args.dataset =='cifar10':
         ## CIFAR
-        transform_train = transforms.Compose([
-            transforms.RandomCrop(32, padding=4), # transforms.Resize(256), transforms.RandomCrop(224),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-        ])
+        # Check if stronger augmentation is requested
+        use_strong_augment = hasattr(args, 'augment') and args.augment
+        
+        if use_strong_augment:
+            # Stronger augmentation for sparse data scenarios (large num_users)
+            transform_train = transforms.Compose([
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomRotation(15),
+                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+                transforms.ToTensor(),
+                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+            ])
+        else:
+            # Standard augmentation
+            transform_train = transforms.Compose([
+                transforms.RandomCrop(32, padding=4), # transforms.Resize(256), transforms.RandomCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+            ])
 
         transform_test = transforms.Compose([
             transforms.ToTensor(),
