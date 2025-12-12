@@ -105,13 +105,13 @@ class ResNet_WD(nn.Module):
     '''
     Depth, width-varying ResNet w/ learnable step option
     '''
-    def __init__(self, block, num_blocks, step_size_2d_list, p_drop, learnable_step=True, num_classes=10, width_per_group=64):
+    def __init__(self, block, num_blocks, step_size_2d_list, p_drop, learnable_step=True, num_classes=10, width_per_group=64, input_channel=3):
         super(ResNet_WD, self).__init__()
         # self.base_width = width_per_group
         self.in_planes = up(64*p_drop)
         # self.conv1 = nn.Conv2d(3, self.in_planes, kernel_size=7,
         #                        stride=2, padding=3, bias=False)
-        self.conv1 = nn.Conv2d(3, self.in_planes, kernel_size=3,
+        self.conv1 = nn.Conv2d(input_channel, self.in_planes, kernel_size=3,
                                stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(self.in_planes)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
@@ -151,11 +151,11 @@ class ResNet_c_WD(nn.Module):
     '''
     Depth, width-varying ResNet designed for CIFAR w/ learnable step option
     '''
-    def __init__(self, block, num_blocks, step_size_2d_list, p_drop, learnable_step=True, num_classes=10):
+    def __init__(self, block, num_blocks, step_size_2d_list, p_drop, learnable_step=True, num_classes=10, input_channel=3):
         super(ResNet_c_WD, self).__init__()
         self.in_planes = up(16*p_drop)
 
-        self.conv1 = nn.Conv2d(3, up(16*p_drop), kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv1 = nn.Conv2d(input_channel, up(16*p_drop), kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(up(16*p_drop))
         self.layer1 = self._make_layer(block, up(16*p_drop), num_blocks[0], step_size_2d_list[0], learnable_step=learnable_step, stride=1)
         self.layer2 = self._make_layer(block, up(32*p_drop), num_blocks[1], step_size_2d_list[1], learnable_step=learnable_step, stride=2)

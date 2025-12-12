@@ -115,7 +115,8 @@ def cifar_noniiddir(args, beta, dataset):
 
 def cifar_noniid(args, dataset):
     """
-    Sample non-I.I.D client data from CIFAR dataset 50000
+    Sample non-I.I.D client data from dataset
+    Works with any dataset size (CIFAR-10: 50000, HAR: 7352, etc.)
     :param dataset:
     :param num_users:
     :return:
@@ -123,12 +124,14 @@ def cifar_noniid(args, dataset):
     np.random.seed(args.rs)
     random.seed(args.rs)
 
-    num_shards, num_imgs = args.num_users * args.class_per_each_client, int(50000/args.num_users/args.class_per_each_client)
+    # Get actual dataset size
+    dataset_size = len(dataset)
+    num_shards = args.num_users * args.class_per_each_client
+    num_imgs = int(dataset_size / args.num_users / args.class_per_each_client)
+    
     # {0: 5000, 1: 5000, 2: 5000, 3: 5000, 4: 5000, 5: 5000, 6: 5000, 7: 5000, 8: 5000, 9: 5000}
     idx_shard = [i for i in range(num_shards)]
     dict_users = {i: np.array([], dtype='int64') for i in range(args.num_users)}
-    # idxs = np.arange(num_shards*num_imgs)
-    # labels = np.array(dataset.targets)
 
     # Use only the samples that can be evenly divided
     total_imgs = num_shards * num_imgs
@@ -348,6 +351,22 @@ def getDataset(args):
     # dataset_train = datasets.Flowers102('/home/hong/NeFL/.data/flowers102', download=True, transform=tranform_train)
     # dataset_test = datasets.Flowers102('/home/hong/NeFL/.data/flowers102', split='test', download=True, transform=tranform_test)
     # split='train',
+    
+    elif args.dataset == 'har':
+        ### Human Activity Recognition (HAR) Dataset
+        from utils.har_dataset import load_uci_har_dataset, generate_synthetic_har_data
+        args.num_classes = 6
+        
+        # Try to load real dataset, fallback to synthetic
+        # Use reshape_to_2d=True to convert 561 features to (1, 24, 24) images
+        data_path = '.data/UCI_HAR'
+        if os.path.exists(data_path):
+            dataset_train, dataset_test = load_uci_har_dataset(data_path, reshape_to_2d=True)
+            print("📊 Loaded UCI HAR dataset (reshaped to 1x24x24 images for Conv2d)")
+        else:
+            print("⚠️  Real HAR dataset not found, generating synthetic data...")
+            print(f"   To use real data, place UCI HAR dataset in: {data_path}")
+            dataset_train, dataset_test = generate_synthetic_har_data(reshape_to_2d=True)
 
     ### Food 101
     # tranform_train = transforms.Compose([transforms.RandomRotation(30),
@@ -375,6 +394,20 @@ def get_submodel_info(args):
     # Calculate the width scaling factor for the small model
     # If ratio is 16:1, the small model has sqrt(1/16) = 0.25 of the width
     small_width_ratio = sqrt(small_ratio / large_ratio)
+    
+    # For HAR dataset (reshaped to 1x24x24 images, use ResNet18)
+    if args.dataset == 'har':
+        # Use same structure as ResNet18 with width scaling
+        # ResNet18 has 4 layer groups, each with 2 blocks
+        # ps: [small_model_width, large_model_width]
+        # s2D: depth configuration for each model
+        # Structure: s2D[model_idx][0] = [[depth_layer1_block1, depth_layer1_block2], [...], [...], [...]]
+        ps = [small_width_ratio, 1]  # Small model uses width scaling, large model uses p=1
+        s2D = [
+            [ [[1, 1], [1, 1], [1, 1], [1, 1]] ],  # Small model: 2 blocks per layer group, 4 layer groups
+            [ [[1, 1], [1, 1], [1, 1], [1, 1]] ]   # Large model: 2 blocks per layer group, 4 layer groups
+        ]
+        return ps, s2D
     
     if args.model_name == 'resnet56':
         if args.method == 'W':

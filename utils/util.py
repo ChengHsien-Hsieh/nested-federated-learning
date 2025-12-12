@@ -87,6 +87,56 @@ def extract_submodel_weight_from_global(net, BN_layers, p, model_i):
   return f
 
 
+def extract_submodel_weight_from_globalM_MLP(net, BN_layer, p, model_i):
+  """
+  Extract sub-model weights from global MLP model for HAR.
+  Similar to ResNet version but simplified for MLP architecture.
+  
+  Args:
+      net: Global MLP model
+      BN_layer: BatchNorm1d layers for this model size
+      p: Width scaling factor
+      model_i: Model index
+  
+  Returns:
+      Sub-model state dict
+  """
+  idx = model_i
+  parent = net.state_dict()
+  f = copy.deepcopy(parent)
+  
+  for key in parent.keys():
+    shape = parent[key].shape
+    
+    # Linear layer weights: (out_features, in_features)
+    if len(shape) == 2:
+      # For intermediate layers, scale both dimensions
+      # For final fc layer, only scale input dimension
+      if 'fc.weight' in key:
+        # Final layer: keep all output classes, scale input
+        f[key] = parent[key][:, 0:up(shape[1]*p)]
+      else:
+        # Hidden layers: scale both input and output
+        layer_out = up(shape[0]*p)
+        layer_in = up(shape[1]*p) if 'features.0' not in key else shape[1]  # First layer keeps full input
+        f[key] = parent[key][0:layer_out, 0:layer_in]
+    
+    # BatchNorm1d parameters and biases
+    elif len(shape) == 1:
+      if key != 'fc.bias':
+        # Use pre-computed BN parameters for this model size
+        f[key] = BN_layer[idx][key]
+      else:
+        # Final layer bias: keep all
+        f[key] = parent[key]
+    
+    # num_batches_tracked (scalar)
+    else:
+      f[key] = BN_layer[idx][key]
+  
+  return f
+
+
 def extract_submodel_weight_from_globalM(net, BN_layer, Step_layer, p, model_i):
   idx = model_i
   parent = net.state_dict()

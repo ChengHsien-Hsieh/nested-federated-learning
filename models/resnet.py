@@ -43,10 +43,10 @@ def resnet110(num_classes):
 '''
 NeFL-WD
 '''
-def resnet18wd(step_size_2d_list, p, learnable_step, num_classes): ## NeFL-WD (kernel 3)
+def resnet18wd(step_size_2d_list, p, learnable_step, num_classes, input_channel=3): ## NeFL-WD (kernel 3)
     model = ResNet_WD(BasicBlockM,
                    [2, 2, 2, 2], step_size_2d_list,
-                   p_drop = p, learnable_step=learnable_step, num_classes=num_classes
+                   p_drop = p, learnable_step=learnable_step, num_classes=num_classes, input_channel=input_channel
                    )
     return model
 
