@@ -29,13 +29,13 @@ class AugmentedDatasetSplit(Dataset):
     
     This is useful when num_users is large and each client has very few samples.
     
-    NOTE: When using this class, the dataset should return PIL Images (no transform).
+    NOTE: Handles both PIL Images (CIFAR-10) and Tensors (HAR) automatically.
     """
 
     def __init__(self, dataset, idxs, virtual_size=0, augment=True):
         """
         Args:
-            dataset: Original dataset that returns PIL Images (transform=None)
+            dataset: Original dataset (PIL Images for CIFAR-10, Tensors for HAR)
             idxs: Indices for this client's data
             virtual_size: If > 0, expand dataset to this size by repeating samples
                           If 0, use original size
@@ -51,39 +51,46 @@ class AugmentedDatasetSplit(Dataset):
         else:
             self.virtual_size = len(self.idxs)
         
-        # Strong augmentation transforms (for PIL Images)
-        if augment:
-            self.strong_transform = transforms.Compose([
-                # Input is PIL Image, no need for ToPILImage
-                transforms.RandomCrop(32, padding=4),
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomRotation(15),
-                transforms.ColorJitter(
-                    brightness=0.2, 
-                    contrast=0.2, 
-                    saturation=0.2, 
-                    hue=0.1
-                ),
-                transforms.RandomAffine(
-                    degrees=0, 
-                    translate=(0.1, 0.1), 
-                    scale=(0.9, 1.1)
-                ),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    (0.4914, 0.4822, 0.4465), 
-                    (0.2023, 0.1994, 0.2010)
-                ),
-            ])
+        # Check if dataset returns tensors (HAR) or PIL Images (CIFAR-10)
+        sample_image, _ = dataset[0]
+        self.is_tensor_dataset = isinstance(sample_image, torch.Tensor)
+        
+        # Setup transforms based on dataset type
+        if self.is_tensor_dataset:
+            # HAR dataset: already tensors, already normalized
+            self.strong_transform = None  # Will apply noise augmentation in __getitem__
         else:
-            # Even without strong augmentation, we need ToTensor and Normalize
-            self.strong_transform = transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    (0.4914, 0.4822, 0.4465), 
-                    (0.2023, 0.1994, 0.2010)
-                ),
-            ])
+            # CIFAR-10 dataset: PIL Images
+            if augment:
+                self.strong_transform = transforms.Compose([
+                    transforms.RandomCrop(32, padding=4),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.RandomRotation(15),
+                    transforms.ColorJitter(
+                        brightness=0.2, 
+                        contrast=0.2, 
+                        saturation=0.2, 
+                        hue=0.1
+                    ),
+                    transforms.RandomAffine(
+                        degrees=0, 
+                        translate=(0.1, 0.1), 
+                        scale=(0.9, 1.1)
+                    ),
+                    transforms.ToTensor(),
+                    transforms.Normalize(
+                        (0.4914, 0.4822, 0.4465), 
+                        (0.2023, 0.1994, 0.2010)
+                    ),
+                ])
+            else:
+                self.strong_transform = transforms.Compose([
+                    transforms.ToTensor(),
+                    transforms.Normalize(
+                        (0.4914, 0.4822, 0.4465), 
+                        (0.2023, 0.1994, 0.2010)
+                    ),
+                ])
 
     def __len__(self):
         return self.virtual_size
@@ -93,10 +100,16 @@ class AugmentedDatasetSplit(Dataset):
         real_idx = self.idxs[item % len(self.idxs)]
         image, label = self.dataset[real_idx]
         
-        # image is a PIL Image, apply transform
-        image = self.strong_transform(image)
-        
-        return image, label
+        if self.is_tensor_dataset:
+            # HAR dataset: image is already a tensor, apply random noise
+            if self.augment:
+                noise = torch.randn_like(image) * 0.01
+                image = image + noise
+            return image, label
+        else:
+            # CIFAR-10 dataset: image is PIL Image, apply transform
+            image = self.strong_transform(image)
+            return image, label
 
 class LocalUpdate(object):
     def __init__(self, args, dataset=None, idxs=None):

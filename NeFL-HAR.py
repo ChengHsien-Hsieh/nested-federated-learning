@@ -1,7 +1,9 @@
 '''
 NeFL for Human Activity Recognition (HAR) Dataset
 HAR data (561 features) is padded to 576 and reshaped to (1, 24, 24) images
-Uses ResNet18 with input_channel=1 for width-scalable heterogeneity
+Supports:
+  - ResNet18 (input_channel=1) for deep learning
+  - CNN (4-layer lightweight) for faster training
 '''
 from torchvision import datasets, transforms
 
@@ -17,6 +19,7 @@ import torch.nn as nn
 import copy
 
 from models import *
+from models.cnn_har import cnn_har_wd
 from utils.fed import *
 from utils.getData import *
 from utils.util import test_img, extract_submodel_weight_from_globalM, get_logger
@@ -235,14 +238,22 @@ def main():
 
     local_models = []
     
-    # HAR dataset uses ResNet18 with input_channel=1 (561 features -> 1x24x24 images)
+    # HAR dataset supports both ResNet18 and lightweight CNN
     if args.dataset == 'har':
-        print(f"\n📱 Building ResNet18 models for HAR (input_channel=1, 1x24x24 images, num_classes={args.num_classes})")
-        for i in range(args.num_models):
-            # Use resnet18wd with input_channel=1 for grayscale HAR images
-            model = resnet18wd(args.s2D[i][0], args.ps[i], args.learnable_step, args.num_classes, input_channel=1)
-            local_models.append(model)
-            print(f"   Model {i}: depth={args.s2D[i][0]}, p={args.ps[i]:.2f}, params={sum(p.numel() for p in model.parameters())}")
+        if args.model_name == 'cnn':
+            # Lightweight 4-layer CNN (faster, fewer parameters)
+            print(f"\n📱 Building CNN models for HAR (input_channel=1, 1x24x24 images, num_classes={args.num_classes})")
+            for i in range(args.num_models):
+                model = cnn_har_wd(p=args.ps[i], input_channel=1, num_classes=args.num_classes)
+                local_models.append(model)
+                print(f"   Model {i}: p={args.ps[i]:.2f}, params={sum(p.numel() for p in model.parameters())}")
+        else:
+            # Default: ResNet18 (deeper, more parameters)
+            print(f"\n📱 Building ResNet18 models for HAR (input_channel=1, 1x24x24 images, num_classes={args.num_classes})")
+            for i in range(args.num_models):
+                model = resnet18wd(args.s2D[i][0], args.ps[i], args.learnable_step, args.num_classes, input_channel=1)
+                local_models.append(model)
+                print(f"   Model {i}: depth={args.s2D[i][0]}, p={args.ps[i]:.2f}, params={sum(p.numel() for p in model.parameters())}")
     
     # Image datasets use ResNet models
     elif args.model_name == 'resnet18':
@@ -287,9 +298,14 @@ def main():
 
     # Initialize global model
     if args.dataset == 'har':
-        # HAR uses ResNet18 with input_channel=1 (no pretrained weights for grayscale 24x24)
-        net_glob = resnet18wd(args.s2D[-1][0], 1, True, num_classes=args.num_classes, input_channel=1)
-        print(f"🌐 Global ResNet18 model (input_channel=1): {sum(p.numel() for p in net_glob.parameters())} parameters")
+        if args.model_name == 'cnn':
+            # CNN global model
+            net_glob = cnn_har_wd(p=1.0, input_channel=1, num_classes=args.num_classes)
+            print(f"🌐 Global CNN model (input_channel=1): {sum(p.numel() for p in net_glob.parameters())} parameters")
+        else:
+            # ResNet18 global model
+            net_glob = resnet18wd(args.s2D[-1][0], 1, True, num_classes=args.num_classes, input_channel=1)
+            print(f"🌐 Global ResNet18 model (input_channel=1): {sum(p.numel() for p in net_glob.parameters())} parameters")
     
     elif args.model_name == 'resnet18':
         net_glob = resnet18wd(args.s2D[-1][0], 1, True, num_classes=args.num_classes)
@@ -495,11 +511,12 @@ def main():
             p_select = args.ps[model_idx]
             
             # Extract sub-model weights from global model
-            # HAR uses ResNet18, so use the standard ResNet weight extraction
+            # Both ResNet18 and CNN use Conv2d layers, so same extraction method
+            # CNN doesn't use Step_layer, but it's safe to pass empty dict
             p_select_weight = extract_submodel_weight_from_globalM(
                 net=copy.deepcopy(net_glob), 
                 BN_layer=BN_layers, 
-                Step_layer=Steps, 
+                Step_layer=Steps if args.model_name != 'cnn' else [{} for _ in range(len(Steps))], 
                 p=p_select, 
                 model_i=model_idx
             )

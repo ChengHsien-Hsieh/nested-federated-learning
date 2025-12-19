@@ -395,19 +395,25 @@ def get_submodel_info(args):
     # If ratio is 16:1, the small model has sqrt(1/16) = 0.25 of the width
     small_width_ratio = sqrt(small_ratio / large_ratio)
     
-    # For HAR dataset (reshaped to 1x24x24 images, use ResNet18)
+    # For HAR dataset (reshaped to 1x24x24 images)
     if args.dataset == 'har':
-        # Use same structure as ResNet18 with width scaling
-        # ResNet18 has 4 layer groups, each with 2 blocks
-        # ps: [small_model_width, large_model_width]
-        # s2D: depth configuration for each model
-        # Structure: s2D[model_idx][0] = [[depth_layer1_block1, depth_layer1_block2], [...], [...], [...]]
-        ps = [small_width_ratio, 1]  # Small model uses width scaling, large model uses p=1
-        s2D = [
-            [ [[1, 1], [1, 1], [1, 1], [1, 1]] ],  # Small model: 2 blocks per layer group, 4 layer groups
-            [ [[1, 1], [1, 1], [1, 1], [1, 1]] ]   # Large model: 2 blocks per layer group, 4 layer groups
-        ]
-        return ps, s2D
+        if args.model_name == 'cnn':
+            # Lightweight CNN: only width scaling (no depth dimension)
+            # ps: [small_model_width, large_model_width]
+            # s2D: set to None for CNN (not used)
+            ps = [small_width_ratio, 1]  # e.g., [0.25, 1.0] for 16:1 ratio
+            s2D = None  # CNN doesn't use depth scaling
+            return ps, s2D
+        else:
+            # ResNet18: width scaling with depth structure
+            # ResNet18 has 4 layer groups, each with 2 blocks
+            # Structure: s2D[model_idx][0] = [[depth_layer1_block1, depth_layer1_block2], [...], [...], [...]]
+            ps = [small_width_ratio, 1]  # Small model uses width scaling, large model uses p=1
+            s2D = [
+                [ [[1, 1], [1, 1], [1, 1], [1, 1]] ],  # Small model: 2 blocks per layer group, 4 layer groups
+                [ [[1, 1], [1, 1], [1, 1], [1, 1]] ]   # Large model: 2 blocks per layer group, 4 layer groups
+            ]
+            return ps, s2D
     
     if args.model_name == 'resnet56':
         if args.method == 'W':
